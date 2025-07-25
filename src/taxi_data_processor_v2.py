@@ -223,29 +223,37 @@ class TaxiDatasetCreatorV2:
         return df
     
     def apply_event_labels(self, df, change_flag_df):
-        """イベントラベルを適用（車両ID無しでタイムスタンプのみでマッチング）"""
-        # タイムスタンプをミリ秒に変換
-        df['timestamp_ms'] = df['timestamp'].astype(np.int64) // 10**6
+        """イベントラベルを適用（タイムスタンプ形式を修正してマッチング）"""
+        # タイムスタンプをYYYYMMDDHHMMSS形式に変換
+        df['timestamp_formatted'] = df['timestamp'].dt.strftime('%Y%m%d%H%M%S').astype(int)
         
-        # change_flagデータとマージ（タイムスタンプのみでマッチング）
+        # change_flagデータとマージ（タイムスタンプでマッチング）
         df = pd.merge(
             df,
             change_flag_df[['time_stamp', 'status_management', 'change_flag']],
-            left_on='timestamp_ms',
+            left_on='timestamp_formatted',
             right_on='time_stamp',
             how='left'
         )
         
-        # ステータス変化を検出（全体で時系列順）
-        df = df.sort_values('timestamp').reset_index(drop=True)
-        df['status_change'] = (df['status_management'].astype(str).str.zfill(2) + 
-                              df['status_management'].shift(1).astype(str).str.zfill(2))
-        
-        # イベントタイプを識別
+        # イベントタイプを識別（change_flagの値に基づく）
         df['event_type'] = 0  # 0: no event
-        df.loc[df['change_flag'] == 1, 'event_type'] = 1  # change_flagベース
-        df.loc[df['status_change'].isin(self.get_on_map), 'event_type'] = 1  # 乗車
-        df.loc[df['status_change'].isin(self.get_off_map), 'event_type'] = 2  # 降車
+        
+        # 乗車イベント（get_on_mapパターン）
+        get_on_patterns = [314, 3, 12, 14, 103, 112, 114, 203, 212, 214, 
+                          403, 412, 414, 503, 512, 514, 603, 612, 614, 
+                          803, 812, 814, 1303, 1312, 1314, 1503, 1512, 1514]
+        df.loc[df['change_flag'].isin(get_on_patterns), 'event_type'] = 1
+        
+        # 降車イベント（get_off_mapパターン）
+        get_off_patterns = [300, 1200, 1400, 301, 1201, 1401, 302, 1202, 1402, 
+                           304, 1204, 1404, 305, 1205, 1405, 306, 1206, 1406, 
+                           308, 1208, 1408, 313, 1213, 1413, 315, 1215, 1415,
+                           1412, 1214, 1002]  # 実際のデータから追加パターン
+        df.loc[df['change_flag'].isin(get_off_patterns), 'event_type'] = 2
+        
+        print(f"Found {(df['event_type'] == 1).sum()} boarding events")
+        print(f"Found {(df['event_type'] == 2).sum()} alighting events")
         
         return df
     
@@ -290,9 +298,8 @@ class TaxiDatasetCreatorV2:
                             df.loc[segment_mask, 'label'] = 2
         
         # 不要なカラムを削除
-        columns_to_drop = ['timestamp_ms', 'time_stamp', 'status_management', 
-                          'change_flag', 'status_change', 'stop_change', 
-                          'stop_segment', 'event_type']
+        columns_to_drop = ['timestamp_formatted', 'time_stamp', 'status_management', 
+                          'change_flag', 'stop_segment', 'event_type']
         df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
         
         return df
@@ -398,10 +405,10 @@ if __name__ == "__main__":
     # change_flag_filled0.csvの存在確認
     if not os.path.exists(change_flag_csv):
         raise FileNotFoundError(f"Required file not found: {change_flag_csv}")
-    
-    # データセット作成（デモ用に最初の100ファイルのみ）
-    creator = TaxiDatasetCreatorV2(json_directory, change_flag_csv, stop_speed_threshold=10.0)
-    base_df, accel_df = creator.save_dataset(output_path, max_files=100)
+
+    # データセット作成
+    creator = TaxiDatasetCreatorV2(json_directory, change_flag_csv)
+    base_df, accel_df = creator.save_dataset(output_path)
     
     # サンプルデータを表示
     print("\nBase data sample:")
