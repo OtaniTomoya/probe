@@ -4,23 +4,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Python-based taxi data processing project that analyzes sensor data from taxi vehicles. The main script processes large JSON datasets containing:
+This is a Python-based taxi data processing project that analyzes sensor data from taxi vehicles. The system processes approximately **49,085 JSON files** (>30GB) from taxi telemetry data to create machine learning datasets for passenger boarding/alighting detection.
+
+**Core Data**: 
 - Vehicle telemetry data (GPS, speed, heading, altitude)
-- Accelerometer data (X, Y, Z axes)
+- Accelerometer data (X, Y, Z axes) 
 - Gyroscope data (radial acceleration)
 - Vehicle state information (blinkers, brakes)
 - Status management and change flags for passenger boarding/alighting detection
 
+**Current Status**: The project includes processed datasets and is ready for analysis or model development.
+
 ## Key Components
 
-### Core Processing Class: TaxiDatasetCreator
-- **Location**: `taxi_data_processor.py:9-266`
-- **Purpose**: Processes thousands of timestamped JSON files and creates machine learning datasets
-- **Key Features**:
-  - Extracts statistical features from sensor array data (mean, max, min, std, median)
-  - Merges with change flag CSV data for labeling
-  - Splits data into training/test sets while preserving time series structure
-  - Handles status change detection for passenger events
+### Core Processing Classes
+1. **TaxiDatasetCreator** (`taxi_data_processor.py:9-266`)
+   - Original implementation with statistical feature aggregation
+   - Extracts statistical features from sensor array data (mean, max, min, std, median)
+   - Creates single row per timestamp with 30+ aggregated features
+
+2. **TaxiDatasetCreatorV2** (`taxi_data_processor_v2.py:9+`)
+   - Enhanced version with separation of base data and acceleration data
+   - Outputs two datasets: base data (1 row/timestamp) and acceleration data (100 rows/timestamp for 100Hz sampling)
+   - Implements stop-based filtering and improved temporal analysis
+   - Better handling of high-frequency sensor data
 
 ### Data Architecture
 - **JSON Files**: Located in `json/` directory with naming pattern `TRP_{IMEI}_{timestamp}.json`
@@ -43,45 +50,95 @@ The system uses specific 4-digit status codes to detect passenger events:
 
 ### Environment Setup
 ```bash
-# Method 1: Automatic setup and execution
+# Method 1: Automatic setup and execution (PREFERRED)
 python setup_and_run.py
 
-# Method 2: Manual setup
-pip install pandas numpy tqdm
+# Method 2: Using uv (modern Python package manager)
+uv run python taxi_data_processor.py
 
-# For development, also install
+# Method 3: Manual setup
+pip install pandas numpy tqdm loads
+
+# For development and analysis
 pip install jupyter matplotlib seaborn scikit-learn
 ```
 
 ### Running the Main Script
 ```bash
-# Process all TRP files and create datasets
-python taxi_data_processor.py
+# Option 1: Original processor (statistical aggregation)
+python src/taxi_data_processor.py
 
-# The script expects:
-# - TRP*.json files in ./json/ directory (thousands of files)
-# - change_flag_filled0.csv file in current directory (REQUIRED for labeling)
-# - Creates output files: taxi_dataset_train.csv, taxi_dataset_test.csv, taxi_dataset_full.csv
+# Option 2: V2 processor (separate base/acceleration data)
+python src/taxi_data_processor_v2.py
+
+# Always run validation tests first (RECOMMENDED)
+python tests/test_processing.py
+
+# For v2 processor testing
+python tests/test_v2_processing.py
+
+# Automated setup and execution
+python scripts/setup_and_run.py
+
+# The main scripts expect:
+# - TRP*.json files in ./json/ directory (49,085 files, ~600KB each)
+# - change_flag_filled0.csv file in ./data/ directory (REQUIRED for labeling)
+# - Creates output files in ./outputs/ directory
+```
+
+### Quick Development Workflow
+```bash
+# 1. Test environment and sample files
+python tests/test_processing.py
+
+# 2. Run full processing (takes significant time)
+python scripts/setup_and_run.py  # OR python src/taxi_data_processor.py
+
+# 3. Check results in outputs directory
+# - outputs/taxi_dataset_full.csv (complete dataset)
+# - outputs/taxi_dataset_train.csv (80% for training)  
+# - outputs/taxi_dataset_test.csv (20% for testing)
 ```
 
 ### File Structure
 ```
 probe/
-├── json/                    # Directory with thousands of TRP files
-│   ├── TRP_352176111064442_20240713130101.json
+├── src/                           # Source code
+│   ├── taxi_data_processor.py     # Original processor (statistical aggregation)
+│   └── taxi_data_processor_v2.py  # Enhanced processor (base/acceleration separation)
+├── tests/                         # Test scripts
+│   ├── test_processing.py         # Tests for original processor
+│   └── test_v2_processing.py      # Tests for v2 processor
+├── scripts/                       # Utility scripts
+│   └── setup_and_run.py          # Automated setup and execution
+├── data/                          # Input data
+│   └── change_flag_filled0.csv   # REQUIRED: ground truth labels for passenger events
+├── outputs/                       # Generated datasets and results
+│   └── taxi_dataset_*.csv        # Generated datasets (when created)
+├── docs/                          # Documentation
+│   └── README.md                 # Project documentation
+├── json/                          # Raw JSON data (49,085 TRP files, ~30GB total)
+│   ├── TRP_352176111064442_20240713130101.json (~600KB each)
 │   ├── TRP_352176111064442_20240713130201.json
-│   └── ... (thousands more)
-├── taxi_data_processor.py   # Main processing script
-├── setup_and_run.py        # Automated setup and execution
-├── change_flag_filled0.csv  # REQUIRED: ground truth labels for passenger events
-└── CLAUDE.md               # This file
+│   └── ... (49,083 more files)  
+├── pyproject.toml                 # Project dependencies (uv-managed)
+├── uv.lock                        # Dependency lockfile
+└── CLAUDE.md                      # This file
 ```
 
 ### Data Processing Pipeline
-1. **JSON Processing**: Each file processed with `process_json_file()` - extracts features from sensor arrays
-2. **Feature Engineering**: Statistical aggregation of time-series data per timestamp
+
+#### Original Processor (`taxi_data_processor.py`)
+1. **JSON Processing**: Each file processed with `process_json_file()` - extracts statistical features from sensor arrays
+2. **Feature Engineering**: Statistical aggregation (mean, max, min, std, median) of time-series data per timestamp
 3. **Label Generation**: Merges with change flag data and applies status transition rules
 4. **Dataset Split**: Time-aware train/test split (80/20) per vehicle to avoid data leakage
+
+#### V2 Processor (`taxi_data_processor_v2.py`)
+1. **Dual Data Extraction**: Separates base data (GPS, speed, blinkers) from acceleration data
+2. **High-Frequency Preservation**: Maintains 100Hz sampling for acceleration/gyroscope data
+3. **Stop Detection**: Identifies vehicle stop segments based on speed thresholds
+4. **Enhanced Labeling**: Applies passenger event detection only during stop periods
 
 ## Code Architecture Notes
 
@@ -121,15 +178,55 @@ probe/
 
 ## Testing and Validation
 
-Currently no formal test suite exists. For development:
-1. Run on small subset of JSON files first
-2. Verify output CSV structure and label distributions
-3. Check for memory usage with large datasets
+### Available Test Scripts
+```bash
+# Run comprehensive validation tests (ALWAYS use this before full processing)
+python tests/test_processing.py        # For original processor
+python tests/test_v2_processing.py     # For v2 processor
+```
+
+The test scripts validate:
+1. **File Detection**: Verifies JSON files and required CSV exist
+2. **JSON Parsing**: Tests parsing of sample files
+3. **Basic Processing**: Runs processing on first 3 files
+4. **Data Structure**: Validates output format and feature extraction
+
+### Development Testing Strategy
+1. Always run appropriate test script first (`tests/test_processing.py` or `tests/test_v2_processing.py`)
+2. Use uv for dependency management: `uv run python <script>.py`
+3. Monitor memory usage when processing large batches
 4. Validate timestamp alignment between JSON and CSV data
+5. For analysis work, prefer using existing datasets in `outputs/` rather than reprocessing
+
+### Code Quality Tools
+- **Dependencies**: Managed via uv and pyproject.toml
+- **No explicit linting**: Project uses standard Python conventions
+- **Error Handling**: Comprehensive try-catch blocks in processing functions
 
 ## Performance Notes
 
-- Processing time scales with number of JSON files (thousands expected)
-- Memory usage depends on dataset size - monitor for large vehicle fleets
-- Consider parallel processing for production use cases
-- Feature extraction is computationally intensive due to statistical calculations
+- **Dataset Size**: 49,085 JSON files (~30GB total, ~600KB each)
+- **Processing Time**: Full processing takes several hours due to file volume
+- **Memory Usage**: Sequential processing to avoid memory issues with large datasets
+- **Feature Extraction**: Computationally intensive statistical calculations on sensor arrays
+- **Recommendation**: Use existing processed datasets (`taxi_dataset_*.csv`) for analysis rather than reprocessing
+
+## Dataset Information
+
+### Original Processor Output
+- **taxi_dataset_full.csv**: Complete dataset with statistical features
+- **taxi_dataset_train.csv**: Training split (80% of data, time-aware split)
+- **taxi_dataset_test.csv**: Test split (20% of data, time-aware split)
+
+Each record contains:
+- Vehicle metadata (car_id, timestamp, speed, GPS coordinates)
+- 30+ statistical features from sensor arrays (mean, max, min, std, median for each sensor)
+- Vehicle state features (blinkers)
+- Target labels (0=no change, 1=boarding, 2=alighting)
+
+### V2 Processor Output
+Generates two separate datasets:
+1. **Base Data**: One row per timestamp with GPS, speed, and vehicle state
+2. **Acceleration Data**: 100 rows per timestamp preserving high-frequency sensor data
+
+This separation allows for both traditional ML approaches (using base data) and deep learning/time-series approaches (using acceleration data).
